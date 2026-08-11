@@ -598,7 +598,7 @@ Ative com: `--spring.profiles.active=prod`
 
 ```bash
 # 1. Clone o repositório
-git clone https://github.com/seu-usuario/srm-mcc-credit-assignment-api.git
+git clone https://github.com/fernandespaz/mcc-credit-assignment-api.git
 cd srm-mcc-credit-assignment-api
 
 # 2. Compile e execute os testes
