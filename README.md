@@ -1,4 +1,4 @@
-# SRM MCC Credit Assignment API
+#MCC Credit Assignment API
 
 > **API RESTful para Cessão de Crédito** — Motor de precificação com Strategy Pattern, liquidações ACID-safe com lock pessimista, motor de câmbio e relatórios analíticos com SQL nativo. Arquitetura hexagonal simplificada em três camadas.
 
