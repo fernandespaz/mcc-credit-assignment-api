@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -80,7 +81,7 @@ public class SettlementStatementQueryRepository {
         for (Object[] row : rows) {
             result.add(new SettlementStatementResponse(
                     UUID.fromString(row[0].toString()),
-                    (LocalDateTime) row[1],
+                    toLocalDateTime(row[1]),
                     UUID.fromString(row[2].toString()),
                     (String) row[3],
                     (String) row[4],
@@ -97,5 +98,11 @@ public class SettlementStatementQueryRepository {
         }
 
         return result;
+    }
+
+    private LocalDateTime toLocalDateTime(Object value) {
+        if (value instanceof LocalDateTime ldt) return ldt;
+        if (value instanceof Timestamp ts) return ts.toLocalDateTime();
+        throw new IllegalArgumentException("Cannot convert to LocalDateTime: " + value);
     }
 }
