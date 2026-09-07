@@ -36,6 +36,12 @@ springdoc:
     path: /swagger-ui.html
     operations-sorter: method
 
+security:
+  jwt:
+    # Dev-only fallback secret — MUST be overridden via JWT_SECRET in any real environment.
+    secret: ${JWT_SECRET:dev-only-insecure-secret-change-me-0123456789abcdef0123456789}
+    expiration-ms: ${JWT_EXPIRATION_MS:3600000}
+
 logging:
   level:
     com.srm.mcc.credit: DEBUG

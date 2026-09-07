@@ -18,16 +18,18 @@
   - [Motor de Câmbio](#motor-de-câmbio)
   - [Liquidação ACID](#liquidação-acid)
 - [API REST](#api-rest)
+  - [Autenticação e Autorização](#autenticação-e-autorização)
   - [Endpoints](#endpoints)
   - [Documentação Swagger](#documentação-swagger)
 - [Relatórios Analíticos (Camada de 2 Níveis)](#relatórios-analíticos-camada-de-2-níveis)
 - [Banco de Dados](#banco-de-dados)
   - [Perfil de Desenvolvimento (H2)](#perfil-de-desenvolvimento-h2)
-  - [Perfil de Produção (PostgreSQL)](#perfil-de-produção-postgresql)
+  - [Perfil de Produção (AWS RDS)](#perfil-de-produção-aws-rds)
 - [Como Executar](#como-executar)
   - [Pré-requisitos](#pré-requisitos)
   - [Executando Localmente](#executando-localmente)
-  - [Executando em Produção](#executando-em-produção)
+  - [Executando em Produção (JAR direto)](#executando-em-produção-jar-direto)
+  - [Executando em Docker com AWS RDS](#executando-em-docker-com-aws-rds)
 - [Exemplos de Uso](#exemplos-de-uso)
 - [Decisões Técnicas](#decisões-técnicas)
 - [Tratamento de Erros](#tratamento-de-erros)
@@ -77,7 +79,7 @@ Esta API implementa o backend de um sistema de **cessão de crédito (factoring)
 | Framework | Spring Boot 3.2 |
 | Persistência | Spring Data JPA + Hibernate 6 |
 | Banco (dev) | H2 (in-memory) |
-| Banco (prod) | PostgreSQL |
+| Banco (prod) | Amazon RDS |
 | Documentação | springdoc-openapi 2.5 (Swagger UI) |
 | Build | Maven 3.9+ |
 | Utilitários | Lombok |
@@ -224,7 +226,7 @@ SettlementApplicationService  (Application — Use Case)
 ReceivableRepositoryAdapter   (Infrastructure — JPA Adapter)
         │  SELECT FOR UPDATE (pessimistic lock)
         ▼
-Banco de Dados                (H2 / PostgreSQL)
+Banco de Dados                (H2 / Amazon RDS)
 ```
 
 ---
@@ -377,52 +379,105 @@ O isolamento `SERIALIZABLE` combinado com o lock pessimista garante que:
 
 ## API REST
 
+### Autenticação e Autorização
+
+A API usa **JWT stateless** (Spring Security). Todos os endpoints sob `/api/v1/**` exigem um
+token válido, exceto `/api/v1/auth/login`.
+
+#### Obtendo um token
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin123"}'
+```
+
+Resposta:
+
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "tokenType": "Bearer",
+  "expiresInMs": 3600000,
+  "username": "admin",
+  "role": "ROLE_ADMIN"
+}
+```
+
+Envie o token em cada requisição subsequente:
+
+```bash
+curl http://localhost:8080/api/v1/assignors \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9..."
+```
+
+#### Roles
+
+| Role | Permissões |
+|---|---|
+| `ADMIN` | Acesso total, incluindo cadastro/edição/desativação de cedentes (PII) e gestão de taxas de câmbio |
+| `OPERATOR` | Cadastra recebíveis e executa liquidações (movimentação financeira) + leitura |
+| `VIEWER` | Somente leitura (consultas e relatórios) |
+
+Usuários são armazenados na tabela `users` (senha com hash BCrypt). Em ambiente de
+desenvolvimento (perfil `!prod`, H2), o `DevUserSeeder` cria automaticamente `admin/admin123`,
+`operator/operator123` e `viewer/viewer123` — **nunca use essas credenciais em produção**.
+Em produção, crie usuários manualmente (ex.: via `psql` com `crypt(senha, gen_salt('bf'))`
+usando a extensão `pgcrypto`, compatível com `BCryptPasswordEncoder`).
+
+Configuração via variáveis de ambiente (ver `.env.example`):
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `JWT_SECRET` | ✅ (em `prod`) | Segredo HMAC-SHA256 para assinar os tokens (≥ 32 bytes aleatórios) |
+| `JWT_EXPIRATION_MS` | — | Validade do token em ms (padrão `3600000` = 1h) |
+
 ### Endpoints
 
 #### Cedentes (`/api/v1/assignors`)
 
-| Método | Endpoint | Descrição | Status |
-|---|---|---|---|
-| `POST` | `/api/v1/assignors` | Cadastrar cedente | `201 Created` |
-| `GET` | `/api/v1/assignors` | Listar todos | `200 OK` |
-| `GET` | `/api/v1/assignors/{id}` | Buscar por ID | `200 OK` |
-| `PATCH` | `/api/v1/assignors/{id}` | Atualizar nome/email | `200 OK` |
-| `DELETE` | `/api/v1/assignors/{id}` | Desativar (soft delete) | `204 No Content` |
+| Método | Endpoint | Descrição | Role mínima | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/assignors` | Cadastrar cedente | `ADMIN` | `201 Created` |
+| `GET` | `/api/v1/assignors` | Listar todos | autenticado | `200 OK` |
+| `GET` | `/api/v1/assignors/{id}` | Buscar por ID | autenticado | `200 OK` |
+| `PATCH` | `/api/v1/assignors/{id}` | Atualizar nome/email | `ADMIN` | `200 OK` |
+| `DELETE` | `/api/v1/assignors/{id}` | Desativar (soft delete) | `ADMIN` | `204 No Content` |
 
 #### Recebíveis (`/api/v1/receivables`)
 
-| Método | Endpoint | Descrição | Status |
-|---|---|---|---|
-| `POST` | `/api/v1/receivables` | Cadastrar título | `201 Created` |
-| `GET` | `/api/v1/receivables` | Listar todos | `200 OK` |
-| `GET` | `/api/v1/receivables/{id}` | Buscar por ID | `200 OK` |
-| `GET` | `/api/v1/receivables/by-assignor/{id}` | Títulos por cedente | `200 OK` |
-| `GET` | `/api/v1/receivables/{id}/simulate?baseRate=0.01` | **Simular VP sem liquidar** | `200 OK` |
+| Método | Endpoint | Descrição | Role mínima | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/receivables` | Cadastrar título | `ADMIN`\|`OPERATOR` | `201 Created` |
+| `GET` | `/api/v1/receivables` | Listar todos | autenticado | `200 OK` |
+| `GET` | `/api/v1/receivables/{id}` | Buscar por ID | autenticado | `200 OK` |
+| `GET` | `/api/v1/receivables/by-assignor/{id}` | Títulos por cedente | autenticado | `200 OK` |
+| `GET` | `/api/v1/receivables/{id}/simulate?baseRate=0.01` | **Simular VP sem liquidar** | autenticado | `200 OK` |
 
 #### Liquidações (`/api/v1/settlements`)
 
-| Método | Endpoint | Descrição | Status |
-|---|---|---|---|
-| `POST` | `/api/v1/settlements` | **Executar liquidação (ACID)** | `201 Created` |
-| `GET` | `/api/v1/settlements/{id}` | Buscar por ID | `200 OK` |
-| `GET` | `/api/v1/settlements/by-receivable/{id}` | Por título | `200 OK` |
+| Método | Endpoint | Descrição | Role mínima | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/settlements` | **Executar liquidação (ACID)** | `ADMIN`\|`OPERATOR` | `201 Created` |
+| `GET` | `/api/v1/settlements/{id}` | Buscar por ID | autenticado | `200 OK` |
+| `GET` | `/api/v1/settlements/by-receivable/{id}` | Por título | autenticado | `200 OK` |
 
 #### Taxas de Câmbio (`/api/v1/exchange-rates`)
 
-| Método | Endpoint | Descrição | Status |
-|---|---|---|---|
-| `POST` | `/api/v1/exchange-rates` | Cadastrar taxa manual | `201 Created` |
-| `GET` | `/api/v1/exchange-rates` | Listar todas | `200 OK` |
-| `GET` | `/api/v1/exchange-rates/{id}` | Buscar por ID | `200 OK` |
-| `GET` | `/api/v1/exchange-rates/pair?from=USD&to=BRL` | Buscar par | `200 OK` |
-| `PUT` | `/api/v1/exchange-rates/{id}` | Atualizar taxa | `200 OK` |
-| `POST` | `/api/v1/exchange-rates/sync-mock` | Sincronizar mock externo | `200 OK` |
+| Método | Endpoint | Descrição | Role mínima | Status |
+|---|---|---|---|---|
+| `POST` | `/api/v1/exchange-rates` | Cadastrar taxa manual | `ADMIN` | `201 Created` |
+| `GET` | `/api/v1/exchange-rates` | Listar todas | autenticado | `200 OK` |
+| `GET` | `/api/v1/exchange-rates/{id}` | Buscar por ID | autenticado | `200 OK` |
+| `GET` | `/api/v1/exchange-rates/pair?from=USD&to=BRL` | Buscar par | autenticado | `200 OK` |
+| `PUT` | `/api/v1/exchange-rates/{id}` | Atualizar taxa | `ADMIN` | `200 OK` |
+| `POST` | `/api/v1/exchange-rates/sync-mock` | Sincronizar mock externo | `ADMIN` | `200 OK` |
 
 #### Relatórios (`/api/v1/reports`)
 
-| Método | Endpoint | Descrição | Status |
-|---|---|---|---|
-| `GET` | `/api/v1/reports/settlement-statement` | **Extrato de liquidações** | `200 OK` |
+| Método | Endpoint | Descrição | Role mínima | Status |
+|---|---|---|---|---|
+| `GET` | `/api/v1/reports/settlement-statement` | **Extrato de liquidações** | autenticado | `200 OK` |
 
 Parâmetros do extrato (todos opcionais):
 
@@ -539,6 +594,14 @@ exchange_rates
 ├── source        VARCHAR(20)   ← MANUAL | MOCK_API
 └── updated_at    TIMESTAMP
      UNIQUE (from_currency, to_currency)
+
+users
+├── id            UUID PK
+├── username      VARCHAR(100) UNIQUE
+├── password      VARCHAR(100)  ← hash BCrypt, nunca texto plano
+├── role          VARCHAR(20)   ← ADMIN | OPERATOR | VIEWER
+├── enabled       BOOLEAN
+└── created_at    TIMESTAMP
 ```
 
 ### Perfil de Desenvolvimento (H2)
@@ -563,21 +626,51 @@ Acesse o console H2 em `http://localhost:8080/h2-console`:
 - **JDBC URL:** `jdbc:h2:mem:creditdb`
 - **User:** `sa` | **Password:** *(vazio)*
 
-### Perfil de Produção (PostgreSQL)
+### Perfil de Produção (AWS RDS)
 
-```yaml
-# application-prod.yml
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/creditdb
-    username: ${DB_USERNAME:credit_user}
-    password: ${DB_PASSWORD:credit_pass}
-  jpa:
-    hibernate:
-      ddl-auto: update
+O datasource de produção **não usa senha estática nem token exportado manualmente**. Um `DataSource` customizado (`RdsIamDataSourceConfig` / `IamAuthPostgresDataSource`) gera um token de autenticação IAM novo — via AWS SDK — a cada conexão física aberta pelo pool HikariCP, respeitando a validade de 15 minutos do token.
+
+```java
+// RdsIamDataSourceConfig.java (ativo apenas no perfil "prod")
+@Bean
+public DataSource dataSource() {
+    RdsUtilities rdsUtilities = RdsUtilities.builder().region(Region.of(awsRegion)).build();
+    DataSource iamAuthDataSource = new IamAuthPostgresDataSource(
+            rdsUtilities, rdsHost, dbPort, dbName, dbUsername, sslMode);
+
+    HikariConfig hikariConfig = new HikariConfig();
+    hikariConfig.setDataSource(iamAuthDataSource); // Hikari chama getConnection() a cada nova conexão física
+    hikariConfig.setMaxLifetime(840_000);          // < 15 min, força reautenticação com token novo
+    return new HikariDataSource(hikariConfig);
+}
 ```
 
 Ative com: `--spring.profiles.active=prod`
+
+#### Variáveis de ambiente
+
+| Variável | Obrigatória | Padrão | Descrição |
+|---|---|---|---|
+| `RDSHOST` | ✅ | — | Endpoint RDS |
+| `DB_USERNAME` | — | `postgres` | Usuário do banco (precisa da role `rds_iam`) |
+| `DB_PORT` | — | `5432` | Porta do banco |
+| `DB_NAME` | — | `postgres` | Nome do banco |
+| `DB_SSL_MODE` | — | `require` | Modo SSL JDBC (`require` para RDS) |
+| `AWS_REGION` | — | `sa-east-1` | Região do RDS, usada para assinar o token IAM |
+| `DB_POOL_MAX` | — | `10` | Máximo de conexões HikariCP |
+| `DB_POOL_MIN` | — | `2` | Mínimo de conexões ociosas HikariCP |
+
+As credenciais AWS usadas para **assinar** o token (não a senha do banco) vêm da cadeia padrão do AWS SDK — IAM role da instância/ECS/EKS, ou `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` como fallback local. Nunca fixe essas credenciais no código ou em arquivos versionados.
+
+#### Pré-requisitos no RDS
+
+1. Crie uma instância **Amazon RDS** (versão 14+) com **IAM database authentication habilitado**
+2. Use o banco `postgres` (padrão) ou crie um banco próprio e ajuste `DB_NAME`
+3. Conceda a role IAM ao usuário do banco: `GRANT rds_iam TO postgres;`
+4. Anexe ao principal IAM que roda a aplicação (role do ECS/EC2/EKS) uma policy permitindo `rds-db:connect` no ARN do usuário/instância
+5. Configure o **Security Group** para permitir acesso na porta `5432` a partir do ECS/EC2 onde a API roda
+6. Anote o **endpoint** (ex: `database-1.xxxx.sa-east-1.rds.amazonaws.com`)
+
 
 ---
 
@@ -629,20 +722,49 @@ Ao abrir `http://localhost:8080/h2-console`, preencha o formulário de login com
 
 > ⚠️ **Atenção:** O H2 Console abre com a JDBC URL padrão (`jdbc:h2:~/test`). Certifique-se de substituí-la por `jdbc:h2:mem:creditdb` antes de conectar, caso contrário ocorrerá erro de banco não encontrado.
 
-### Executando em Produção
+### Executando em Produção (JAR direto)
 
 ```bash
-# Configure as variáveis de ambiente do banco
-export DB_USERNAME=credit_user
-export DB_PASSWORD=sua_senha_segura
+# Configure as variáveis de ambiente do RDS (sem token/senha — geração automática via AWS SDK)
+export RDSHOST="database-1.cr0km4kiuprv.sa-east-1.rds.amazonaws.com"
+export DB_USERNAME=postgres
+export DB_NAME=postgres
+export DB_SSL_MODE=require
+export AWS_REGION=sa-east-1
+# Se não houver IAM role anexada ao host (ex: teste local), exporte também:
+# export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...
 
 # Gere o JAR
 mvn clean package -DskipTests
 
-# Execute com perfil de produção (PostgreSQL)
+# Execute com perfil de produção
 java -jar target/srm-mcc-credit-assignment-api-1.0.0-SNAPSHOT.jar \
      --spring.profiles.active=prod
 ```
+
+> **Verificação manual da conexão (opcional, fora da aplicação):**
+> ```bash
+> psql "host=$RDSHOST port=5432 dbname=postgres user=postgres sslmode=require password=$(aws rds generate-db-auth-token --hostname $RDSHOST --port 5432 --username postgres --region sa-east-1)"
+> ```
+
+### Executando em Docker com AWS RDS
+
+```bash
+# 1. Copie o arquivo de exemplo e preencha com os dados do RDS
+cp .env.example .env
+# edite o .env com o endpoint do RDS (e credenciais AWS apenas se não houver IAM role)
+
+# 2. Suba o container da API
+docker compose up --build
+
+# Ou passe as variáveis inline (sem .env)
+RDSHOST=database-1.cr0km4kiuprv.sa-east-1.rds.amazonaws.com \
+DB_USERNAME=postgres \
+DB_NAME=postgres \
+AWS_REGION=sa-east-1 \
+docker compose up --build
+```
+
 
 ---
 
@@ -807,18 +929,19 @@ O sistema precisa persistir liquidações financeiras que envolvem múltiplas en
 
 | Opção | Prós | Contras |
 |---|---|---|
-| **PostgreSQL (escolhido)** | ACID nativo, JOINs eficientes, suporte a row-level locking (`SELECT FOR UPDATE`), maturidade comprovada em fintech | Escalabilidade horizontal mais complexa |
+| **Amazon RDS (escolhido)** | ACID nativo, JOINs eficientes, suporte a row-level locking (`SELECT FOR UPDATE`), maturidade comprovada em fintech, gerenciado pela AWS | Escalabilidade horizontal mais complexa |
 | MongoDB | Schema flexível, escala horizontal simples | Sem JOINs nativos, transações multi-documento mais limitadas, menos adequado para relatórios relacionais |
 | DynamoDB | Escala massiva, latência baixa | Sem JOINs, modelo de acesso rígido, queries analíticas exigem exportação para Redshift ou Athena |
 | Redis | Latência microsegundos | Não é um banco primário, sem durabilidade garantida por padrão |
 
 #### Decisão
-**PostgreSQL** com Spring Data JPA para escrita e SQL nativo para leitura analítica.
+**Amazon RDS** com Spring Data JPA para escrita e SQL nativo para leitura analítica.
 
 #### Consequências
 - ✅ Propriedades ACID garantidas sem custo adicional de implementação
 - ✅ `SELECT FOR UPDATE` resolve race conditions de liquidação de forma nativa
 - ✅ Queries analíticas com filtros dinâmicos e paginação são simples e performáticas
+- ✅ Infraestrutura gerenciada pela AWS (backups, failover, patches automáticos)
 - ⚠️ Em escala (>10M registros), particionamento por data de `settled_at` será necessário (ver ADR de alta escala)
 
 ---
@@ -871,7 +994,7 @@ O domínio financeiro tem regras de negócio complexas (precificação, validaç
 
 #### Consequências
 - ✅ Entidades de domínio são POJOs puros — testáveis com `new Receivable()` sem Spring
-- ✅ Troca de banco (H2 → PostgreSQL → MongoDB) exige alteração somente nos adapters
+- ✅ Troca de banco (H2 → Amazon RDS → outro) exige alteração somente nos adapters
 - ✅ Pricing Strategy pode ser testada unitariamente com valores conhecidos
 - ⚠️ Adapters de persistência exigem mapeamento manual entre entidades de domínio e entidades JPA
 
@@ -938,13 +1061,13 @@ Diferentes tipos de recebível carregam diferentes spreads de risco. A regra de 
 
 ### Contexto e Desafios
 
-**1.000.000 tx/min ≈ 16.667 tx/s** de pico. O design atual (monolito + PostgreSQL single node) suporta aproximadamente **500–2.000 tx/s** com hardware moderno. Atingir a meta exige uma série de mudanças arquiteturais.
+**1.000.000 tx/min ≈ 16.667 tx/s** de pico. O design atual (monolito + Amazon RDS single node) suporta aproximadamente **500–2.000 tx/s** com hardware moderno. Atingir a meta exige uma série de mudanças arquiteturais.
 
 **Principais gargalos a resolver:**
 
 | Gargalo | Impacto | Solução |
 |---|---|---|
-| Escritas serializadas no PostgreSQL (lock pessimista) | Throughput máximo ~2k tx/s por shard | Sharding + Kafka para serialização |
+| Escritas serializadas no RDS (lock pessimista) | Throughput máximo ~2k tx/s por shard | Sharding + Kafka para serialização |
 | Leitura de taxas de câmbio a cada liquidação | N queries desnecessárias | Cache distribuído (Redis) |
 | Relatórios analíticos em banco transacional | Contention com escritas | Replicação leitura + OLAP separado |
 | Instância única da aplicação | Single point of failure | Múltiplas réplicas + Load Balancer |
@@ -987,7 +1110,7 @@ Diferentes tipos de recebível carregam diferentes spreads de risco. A regra de 
           └──────┬───────┘ └──────────────┘ └──────┬───────┘
                  │                                  │
      ┌───────────▼──────────┐             ┌────────▼────────┐
-     │   PostgreSQL         │             │   ClickHouse /  │
+     │   Amazon RDS         │             │   ClickHouse /  │
      │   (Sharded)          │             │   Redshift      │
      │   Shard 0: A–F       │             │   (OLAP)        │
      │   Shard 1: G–N       │             └─────────────────┘
@@ -1057,7 +1180,7 @@ Para evitar que múltiplas instâncias reconstroem o cache simultaneamente após
 
 Com 1M tx/min, a tabela `settlements` cresce ~1.5B registros/mês. A estratégia recomendada:
 
-**1. Particionamento por data (Range Partitioning)** — nível PostgreSQL:
+**1. Particionamento por data (Range Partitioning)** — nível RDS:
 ```sql
 -- Tabela mãe
 CREATE TABLE settlements (
@@ -1078,13 +1201,13 @@ CREATE TABLE settlements_2024_01 PARTITION OF settlements
 
 **2. Sharding por `assignor_id` (Hash Sharding)** — nível aplicação:
 
-Para liquidações acima de 10M/dia, distribuir em múltiplos nós PostgreSQL:
+Para liquidações acima de 10M/dia, distribuir em múltiplos nós RDS:
 ```
 Shard = hash(assignor_id) % NUM_SHARDS
 
-assignor_id hash % 3 == 0 → PostgreSQL Shard 0
-assignor_id hash % 3 == 1 → PostgreSQL Shard 1
-assignor_id hash % 3 == 2 → PostgreSQL Shard 2
+assignor_id hash % 3 == 0 → RDS Shard 0
+assignor_id hash % 3 == 1 → RDS Shard 1
+assignor_id hash % 3 == 2 → RDS Shard 2
 ```
 
 O sharding por `assignor_id` garante que todas as liquidações de um cedente ficam no mesmo shard, preservando a possibilidade de queries analíticas por cedente sem fan-out.
@@ -1141,7 +1264,7 @@ Isso garante **exatamente-uma-vez** na publicação do evento, sem perda mesmo e
 | Throughput de escrita | ~8 MB/s |
 | Crescimento da tabela `settlements` | ~42 GB/dia |
 | Instâncias da aplicação necessárias (8 cores) | ~12–16 pods |
-| Shards PostgreSQL necessários | 4–8 (com particionamento por data) |
+| Shards RDS necessários | 4–8 (com particionamento por data) |
 | Partições Kafka (topic `settlements`) | 64 (escalável) |
 | Cache Redis — memória estimada (exchange rates) | < 1 MB (dados pequenos) |
 | Cache Redis — memória estimada (assignors hot) | ~500 MB para 1M cedentes |
@@ -1344,7 +1467,7 @@ metadata:
   namespace: credit-assignment
 type: Opaque
 stringData:
-  DB_URL:      "jdbc:postgresql://postgres-service:5432/creditdb"
+  DB_URL:      "jdbc:postgresql://<rds-endpoint>:5432/creditdb"
   DB_USERNAME: "credit_user"
   DB_PASSWORD: "SUBSTITUA_PELO_VALOR_REAL"
 ```
