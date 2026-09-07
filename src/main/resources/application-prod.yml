@@ -1,18 +1,35 @@
-# PostgreSQL production profile
+# AWS RDS production profile
 # Activate with: --spring.profiles.active=prod
+#
+# The datasource itself is NOT configured here — see
+# com.srm.mcc.credit.infrastructure.config.RdsIamDataSourceConfig, which builds a HikariCP pool
+# backed by a custom DataSource that authenticates with a fresh AWS IAM token (15-min TTL) on
+# every physical connection. No static DB password is ever stored or exported.
+#
+# Required environment variables:
+#   RDSHOST     - RDS endpoint (e.g. database-2-instance-1.xxxx.sa-east-1.rds.amazonaws.com)
+#   JWT_SECRET  - HMAC-SHA256 signing secret for JWT access tokens (>= 32 random bytes).
+#                 No default is provided here on purpose: the app MUST fail to start in
+#                 production if this is missing, rather than fall back to an insecure value.
+#
+# Optional environment variables (defaults shown):
+#   DB_PORT       5432
+#   DB_NAME       postgres
+#   DB_USERNAME   postgres
+#   DB_SSL_MODE   require        (use 'disable' only for local dev without SSL)
+#   AWS_REGION    sa-east-1
+#   DB_POOL_MAX   10
+#   DB_POOL_MIN   2
+#   JWT_EXPIRATION_MS  3600000   (1 hour)
+#
+# AWS credentials used to sign the IAM auth token come from the SDK default credential chain
+# (instance profile / ECS task role / EKS service account / env vars) — never hardcoded.
 spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/creditdb
-    driver-class-name: org.postgresql.Driver
-    username: ${DB_USERNAME:credit_user}
-    password: ${DB_PASSWORD:credit_pass}
-
   jpa:
     hibernate:
       ddl-auto: update
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
         jdbc:
           batch_size: 50
         order_inserts: true
@@ -21,3 +38,9 @@ spring:
   h2:
     console:
       enabled: false
+
+security:
+  jwt:
+    secret: ${JWT_SECRET}
+    expiration-ms: ${JWT_EXPIRATION_MS:3600000}
+

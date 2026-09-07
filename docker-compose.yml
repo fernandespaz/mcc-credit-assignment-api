@@ -16,6 +16,8 @@ services:
       AWS_REGION: ${AWS_REGION:-sa-east-1}
       DB_POOL_MAX: ${DB_POOL_MAX:-10}
       DB_POOL_MIN: ${DB_POOL_MIN:-2}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-3600000}
       # AWS credentials for signing IAM auth tokens. Prefer an attached IAM role (ECS task
       # role / EC2 instance profile) and omit these entirely; only set them for local testing.
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
