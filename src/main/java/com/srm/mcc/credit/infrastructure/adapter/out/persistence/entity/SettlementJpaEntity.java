@@ -3,6 +3,8 @@ package com.srm.mcc.credit.infrastructure.adapter.out.persistence.entity;
 import com.srm.mcc.credit.domain.enums.Currency;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -22,6 +24,7 @@ import java.util.UUID;
 public class SettlementJpaEntity {
 
     @Id
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(columnDefinition = "VARCHAR(36)")
     private UUID id;
 

@@ -5,6 +5,8 @@ import com.srm.mcc.credit.domain.enums.ReceivableType;
 import com.srm.mcc.credit.domain.enums.SettlementStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -24,6 +26,7 @@ import java.util.UUID;
 public class ReceivableJpaEntity {
 
     @Id
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(columnDefinition = "VARCHAR(36)")
     private UUID id;
 
