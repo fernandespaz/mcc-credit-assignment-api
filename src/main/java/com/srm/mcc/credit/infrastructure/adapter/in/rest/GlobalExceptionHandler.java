@@ -45,6 +45,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({BadCredentialsException.class, DisabledException.class, AuthenticationException.class})
     public ResponseEntity<ApiErrorResponse> handleAuthentication(AuthenticationException ex) {
+        log.warn("Authentication failed: {} - {}", ex.getClass().getName(), ex.getMessage(), ex);
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new ApiErrorResponse(HttpStatus.UNAUTHORIZED.value(), "Invalid credentials", LocalDateTime.now()));
     }
