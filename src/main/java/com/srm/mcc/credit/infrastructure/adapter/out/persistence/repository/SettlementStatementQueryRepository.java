@@ -59,10 +59,10 @@ public class SettlementStatementQueryRepository {
                 FROM settlements s
                 JOIN receivables r  ON s.receivable_id = r.id
                 JOIN assignors  a  ON r.assignor_id    = a.id
-                WHERE (:startDate        IS NULL OR s.settled_at       >= :startDate)
-                  AND (:endDate          IS NULL OR s.settled_at       <= :endDate)
-                  AND (:assignorId       IS NULL OR CAST(a.id AS VARCHAR) = :assignorId)
-                  AND (:paymentCurrency  IS NULL OR s.payment_currency  = :paymentCurrency)
+                WHERE (CAST(:startDate AS TIMESTAMP)       IS NULL OR s.settled_at       >= CAST(:startDate AS TIMESTAMP))
+                  AND (CAST(:endDate AS TIMESTAMP)         IS NULL OR s.settled_at       <= CAST(:endDate AS TIMESTAMP))
+                  AND (CAST(:assignorId AS VARCHAR)        IS NULL OR CAST(a.id AS VARCHAR) = CAST(:assignorId AS VARCHAR))
+                  AND (CAST(:paymentCurrency AS VARCHAR)   IS NULL OR s.payment_currency  = CAST(:paymentCurrency AS VARCHAR))
                 ORDER BY s.settled_at DESC
                 """;
 
